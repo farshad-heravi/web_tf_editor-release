@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [jazzy]
+  pull_request:
+    branches: [jazzy]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ros-build-test:
+    name: ros (${{ matrix.ros_distro }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ros_distro: humble
+            os: ubuntu-22.04
+          - ros_distro: jazzy
+            os: ubuntu-24.04
+          - ros_distro: rolling
+            os: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # No npm here on purpose: web/dist/ is committed, and the ROS buildfarm builds offline from
+      # the source tag, so this job checks the package builds exactly the way the buildfarm will.
+      - uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: ${{ matrix.ros_distro }}
+
+      - uses: ros-tooling/action-ros-ci@v0.4
+        with:
+          package-name: web_tf_editor
+          target-ros2-distro: ${{ matrix.ros_distro }}
+
+  web-build:
+    name: web bundle is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      # web/dist/ is committed (the buildfarm has no npm), so it must match what web/src builds.
+      - name: Check committed web/dist matches web/src
+        run: |
+          git status --porcelain web/dist
+          git diff --exit-code web/dist || {
+            echo "::error::web/dist is stale: run 'cd web && npm ci && npm run build' and commit web/dist."
+            exit 1
+          }
+          test -z "$(git status --porcelain web/dist)"
